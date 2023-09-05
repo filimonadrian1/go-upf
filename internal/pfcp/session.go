@@ -84,23 +84,85 @@ func (s *PfcpServer) handleSessionEstablishmentRequest(
 	}
 
 	var v4 net.IP
+	/*############################## */
+	/* node id is the wrong ip. TODO modify with n3 interface ip addr.  */
+
+	// addrv4, err := net.ResolveIPAddr("ip4", s.nodeID)
+	// if err == nil {
+	// 	v4 = addrv4.IP.To4()
+	// }
+	/*############################## */
+
 	addrv4, err := net.ResolveIPAddr("ip4", s.nodeID)
 	if err == nil {
 		v4 = addrv4.IP.To4()
 	}
+
 	// TODO: support v6
 	var v6 net.IP
+	var createdPDR *ie.IE
+	var chooseBit uint8 = 0x4
 
-	rsp := message.NewSessionEstablishmentResponse(
-		0,             // mp
-		0,             // fo
-		sess.RemoteID, // seid
-		req.Header.SequenceNumber,
-		0, // pri
-		newIeNodeID(s.nodeID),
-		ie.NewCause(ie.CauseRequestAccepted),
-		ie.NewFSEID(sess.LocalID, v4, v6),
-	)
+	var rsp *message.SessionEstablishmentResponse
+
+	for _, createPdrIE := range req.CreatePDR {
+
+		pdi, err := createPdrIE.PDI()
+		if err != nil {
+			sess.log.Errorf("Cannot get pdi from createdPDR %+v", err)
+		}
+
+		for _, pdiIE := range pdi {
+
+			switch pdiIE.Type {
+			case ie.FTEID:
+				fteid, err := pdiIE.FTEID()
+				if err != nil {
+					sess.log.Errorf("Cannot get fteid from pdi %+v", err)
+				}
+
+				chooseFlag := fteid.Flags & chooseBit
+				if chooseFlag != 0 {
+					pdrid, err := createPdrIE.PDRID()
+					if err != nil {
+						sess.log.Errorf("Cannot get PDRID: %+v", err)
+					}
+
+					createdPDR = ie.NewCreatedPDR(
+						ie.NewPDRID(pdrid),
+						ie.NewFTEID(0x01, 0x00000001, v4, v6, 0),
+						ie.NewUEIPAddress(0x02, "10.0.0.1", "", 0, 0),
+					)
+					break
+				}
+			}
+		}
+	}
+
+	if createdPDR != nil {
+		rsp = message.NewSessionEstablishmentResponse(
+			0,             // mp
+			0,             // fo
+			sess.RemoteID, // seid
+			req.Header.SequenceNumber,
+			0, // pri
+			newIeNodeID(s.nodeID),
+			ie.NewCause(ie.CauseRequestAccepted),
+			ie.NewFSEID(sess.LocalID, v4, v6),
+			createdPDR,
+		)
+	} else {
+		rsp = message.NewSessionEstablishmentResponse(
+			0,             // mp
+			0,             // fo
+			sess.RemoteID, // seid
+			req.Header.SequenceNumber,
+			0, // pri
+			newIeNodeID(s.nodeID),
+			ie.NewCause(ie.CauseRequestAccepted),
+			ie.NewFSEID(sess.LocalID, v4, v6),
+		)
+	}
 
 	err = s.sendRspTo(rsp, addr)
 	if err != nil {
